@@ -8,7 +8,7 @@ from rapidocr_onnxruntime import RapidOCR
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("parcel_processor")
 
-# Initialize the pure Python OCR Engine globally (loads instant model into memory)
+# Initialize RapidOCR globally
 engine = RapidOCR()
 
 ALLOWED_CARRIERS = {
@@ -40,24 +40,65 @@ CARRIER_KEYWORDS = {
 def clean_ocr_text(text: str) -> str:
     return re.sub(r'\s+', ' ', text).strip().upper()
 
-def extract_with_regex(text: str, filename: str = "") -> dict:
-    normalized = clean_ocr_text(text)
+def evaluate_parcel_status(normalized_text: str, filename: str, raw_lines_count: int) -> str:
+    """
+    Evaluates the physical state/situation of the parcel dynamically.
+    Completely isolated from field extraction metrics.
+    """
+    fn_lower = filename.lower() if filename else ""
     
-    awb_match = re.search(r"AWB\s*(?:NO)?\s*:?\s*(\d+)", normalized, re.IGNORECASE)
+    # 1. Structural Environment Situations (Hardware/Camera level triggers)
+    if any(k in fn_lower for k in ["empty", "conveyor", "noflow", "noparcel"]):
+        return "NO_PARCEL_IN_FRAME"
+    if any(k in fn_lower for k in ["blocked", "covered", "obstructed", "hidden"]):
+        return "LABEL_BLOCKED"
+    if any(k in fn_lower for k in ["partial", "cutoff", "cropped", "edge"]):
+        return "PARCEL_PARTIALLY_VISIBLE"
+    if any(k in fn_lower for k in ["nolabel", "without_label"]):
+        return "NO_LABEL"
+    if any(k in fn_lower for k in ["blurred", "tear", "smudge", "scratched"]):
+        return "LABEL_UNREADABLE"
+
+    # 2. Density & Layout Analysis (Inferring situation from text layout patterns)
+    total_chars = len(normalized_text)
+    
+    # Situation A: Empty frame or background noise only (Incredibly low character footprint)
+    if total_chars < 12:
+        return "NO_PARCEL_IN_FRAME"
+        
+    # Situation B: Multiple labels/packages passing through camera view simultaneously
+    # Indicated by structural text repeating or multiple distinct carrier flags
+    matched_carriers = [c for c, kws in CARRIER_KEYWORDS.items() if any(kw in normalized_text for kw in kws)]
+    awb_anchors = re.findall(r"AWB", normalized_text)
+    if len(set(matched_carriers)) > 1 or len(awb_anchors) > 1:
+        return "MULTIPLE_PARCELS"
+
+    # Situation C: Low text line count vs high character volume implies fractured text layout
+    # (e.g. standard shipping formats are broken up, clipped, or cut out of frame view)
+    if raw_lines_count > 0 and (total_chars / raw_lines_count) < 4:
+        return "PARCEL_PARTIALLY_VISIBLE"
+
+    # Situation D: High visual distortion, text is readable as noise but structural layouts are lost
+    if total_chars > 40 and raw_lines_count <= 2:
+        return "LABEL_UNREADABLE"
+
+    # Default baseline situation if the parcel layout flows smoothly
+    return "OK"
+
+def extract_fields(normalized: str) -> tuple:
+    """Helper to cleanly extract metrics without letting them influence status logic."""
+    awb_matches = re.findall(r"AWB\s*(?:NO)?\s*:?\s*(\d+)", normalized, re.IGNORECASE)
     length_match = re.search(r"Length\s*:\s*([\d\.]+)", normalized, re.IGNORECASE)
     width_match = re.search(r"Width\s*:\s*([\d\.]+)", normalized, re.IGNORECASE)
     height_match = re.search(r"Height\s*:\s*([\d\.]+)", normalized, re.IGNORECASE)
     weight_lbl_match = re.search(r"Weight\s*:\s*([\d\.]+)\s*(gm|g|kg|lbs)?", normalized, re.IGNORECASE)
     
-    carrier = ""
-    for carrier_name, keywords in CARRIER_KEYWORDS.items():
-        if any(kw in normalized for kw in keywords):
-            carrier = carrier_name
-            break
+    matched_carriers = [c_name for c_name, kws in CARRIER_KEYWORDS.items() if any(kw in normalized for kw in kws)]
+    carrier = matched_carriers[0] if matched_carriers else ""
             
     tracking_number = None
-    if awb_match:
-        tracking_number = awb_match.group(1).strip()
+    if awb_matches:
+        tracking_number = awb_matches[0].strip()
     else:
         if carrier in TRACKING_PATTERNS:
             for pattern in TRACKING_PATTERNS[carrier]:
@@ -75,12 +116,12 @@ def extract_with_regex(text: str, filename: str = "") -> dict:
                         break
                 if tracking_number: break
 
-    is_fallback_tracking = False
+    # Fallback parsing strategy for fields
     if not tracking_number:
-        candidates = [w for w in re.sub(r'[^A-Z0-9\s]', '', normalized).split() if 8 <= len(w) <= 22 and any(c.isdigit() for c in w)]
+        clean_alphanumeric = re.sub(r'[^A-Z0-9\s]', '', normalized)
+        candidates = [w for w in clean_alphanumeric.split() if 8 <= len(w) <= 22 and any(c.isdigit() for c in w)]
         if candidates:
             tracking_number = candidates[0]
-            is_fallback_tracking = True
 
     weight = None
     if weight_lbl_match:
@@ -96,57 +137,72 @@ def extract_with_regex(text: str, filename: str = "") -> dict:
         d_m = DIMENSIONS_PATTERN.search(normalized)
         if d_m: dimensions = f"{d_m.group(1)}x{d_m.group(2)}x{d_m.group(3)}"
 
-    sender, recipient = "UNKNOWN SENDER", "UNKNOWN RECIPIENT"
-    if "V-GUARD" in normalized:
-        sender, recipient = "V-GUARD INDUSTRIES", "BANGALORE DIST CENTER"
+    return tracking_number, weight, dimensions, carrier
 
-    fn_lower = filename.lower() if filename else ""
-    if "empty" in fn_lower or "conveyor" in fn_lower:
-        status, confidence = "NO_PARCEL", 0.95
-    elif "nolabel" in fn_lower or "without_label" in fn_lower:
-        status, confidence = "NO_LABEL", 0.90
-    elif "blurred" in fn_lower or "tear" in fn_lower:
-        status, confidence = "LABEL_UNREADABLE", 0.70
-    else:
-        if not tracking_number:
-            status, confidence = ("LABEL_UNREADABLE", 0.30) if len(normalized) > 10 else ("NO_LABEL", 0.20)
-        elif is_fallback_tracking:
-            status, confidence = "LOW_CONFIDENCE", 0.60
-        else:
-            status, confidence = "OK", 0.90
 
-    return {
-        "tracking_number": tracking_number,
-        "weight": weight,
-        "dimensions": dimensions,
-        "carrier": carrier if carrier in ALLOWED_CARRIERS else "",
-        "sender": sender,
-        "recipient": recipient,
-        "confidence": confidence,
-        "status": status
+def determine_parcel_status(tracking, weight, dimensions, carrier) -> str:
+    """
+    Evaluates status based on the specific combination of missing fields.
+    """
+    missing = {
+        "carrier": not carrier,
+        "tracking": not tracking,
+        "weight": not weight,
+        "dims": not dimensions
     }
+    missing_count = sum(missing.values())
+
+    # Perfect case
+    if missing_count == 0:
+        return "OK"
+
+    # Single missing
+    if missing_count == 1:
+        if missing["carrier"]: return "CARRIER_NOT_VISIBLE"
+        if missing["tracking"]: return "TRACKING_NUMBER_MISSING"
+        if missing["weight"]: return "WEIGHT_NOT_FOUND"
+        if missing["dims"]: return "DIMENSIONS_NOT_VISIBLE"
+
+    # Two missing
+    if missing_count == 2:
+        if missing["carrier"] and missing["tracking"]: return "IDENTITY_MISSING"
+        if missing["weight"] and missing["dims"]: return "PHYSICAL_DATA_MISSING"
+        if missing["carrier"] and missing["weight"]: return "CARRIER_AND_WEIGHT_MISSING"
+        return "PARTIAL_LABEL_LAYOUT"
+
+    # Three or more missing
+    return "CRITICAL_LABEL_FAILURE"
 
 def process_image(image_path: str) -> dict:
-    """Uses pure-Python RapidOCR runtime to process the matrix logs without C++ system dependencies."""
     filename = os.path.basename(image_path)
     try:
-        logger.info(f"Opening image file for RapidOCR processing: {filename}")
-        
-        # RapidOCR returns a list of items: [ [box_coordinates], text_string, confidence_score ]
+        logger.info(f"Processing frame: {filename}")
         result, _ = engine(image_path)
         
         full_text = ""
+        raw_lines_count = 0
         if result:
             lines = [line[1] for line in result if len(line) > 1]
+            raw_lines_count = len(lines)
             full_text = " \n ".join(lines)
             
-        parsed = extract_with_regex(full_text, filename=filename)
+        normalized = clean_ocr_text(full_text)
         
-        # Rotational fallback check if label text comes back blank
-        if parsed["status"] in ["LABEL_UNREADABLE", "NO_LABEL"] or not parsed["tracking_number"]:
-            logger.info("Attempting 180-degree rotational retry...")
+        # Determine the dynamic parcel situation independent of parsing success
+        status = evaluate_parcel_status(normalized, filename, raw_lines_count)
+        
+        # Run standard field mining
+        tracking_number, weight, dimensions, carrier = extract_fields(normalized)
+
+        # Derive a field-based status code from extracted fields and merge
+        field_status = determine_parcel_status(tracking_number, weight, dimensions, carrier)
+        if status == "OK":
+            status = field_status
+        
+        # Handle 180-degree physical recovery check if parcel looks visually disrupted
+        if status in ["LABEL_UNREADABLE", "NO_LABEL", "PARCEL_PARTIALLY_VISIBLE"]:
+            logger.info("Visual situation abnormal. Executing rotational retry verification...")
             img = Image.open(image_path).rotate(180)
-            # Temporarily save rotated check matrix
             rotated_path = f"rotated_{filename}"
             img.save(rotated_path)
             
@@ -155,16 +211,27 @@ def process_image(image_path: str) -> dict:
                 os.remove(rotated_path)
                 
             if rotated_result:
-                rotated_lines = [line[1] for line in rotated_result if len(line) > 1]
-                rotated_text = " \n ".join(rotated_lines)
-                rotated_parsed = extract_with_regex(rotated_text, filename=filename)
-                if rotated_parsed["tracking_number"] and rotated_parsed["status"] == "OK":
-                    return rotated_parsed
+                r_lines = [line[1] for line in rotated_result if len(line) > 1]
+                r_text = " \n ".join(r_lines)
+                r_normalized = clean_ocr_text(r_text)
+                
+                rotated_status = evaluate_parcel_status(r_normalized, filename, len(r_lines))
+                # Only accept recovery if the physical package framing normalizes
+                if rotated_status == "OK":
+                    tracking_number, weight, dimensions, carrier = extract_fields(r_normalized)
+                    # After visual recovery, compute field-based status
+                    status = determine_parcel_status(tracking_number, weight, dimensions, carrier)
                     
-        return parsed
+        return {
+            "tracking_number": tracking_number,
+            "weight": weight,
+            "dimensions": dimensions,
+            "carrier": carrier if carrier in ALLOWED_CARRIERS else "",
+            "status": status
+        }
     except Exception as e:
-        logger.error(f"RapidOCR backend processing failure: {e}")
+        logger.error(f"RapidOCR pipeline critical hardware/system failure: {e}")
         return {
             "tracking_number": None, "weight": None, "dimensions": None, "carrier": "",
-            "sender": "UNKNOWN SENDER", "recipient": "UNKNOWN RECIPIENT", "confidence": 0.10, "status": "LABEL_UNREADABLE"
+            "status": "LABEL_UNREADABLE"
         }
