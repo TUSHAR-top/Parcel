@@ -2,19 +2,15 @@ import os
 import re
 import logging
 from PIL import Image
-import pytesseract
-
-# --- RENDER ENVIRONMENT PATCH ---
-# This explicitly tells pytesseract where Linux binaries are stored 
-# so it doesn't fail with a TesseractNotFoundError on Render.
-if os.path.exists('/usr/bin/tesseract'):
-    pytesseract.pytesseract.tesseract_cmd = '/usr/bin/tesseract'
+from rapidocr_onnxruntime import RapidOCR
 
 # Setup logger
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("parcel_processor")
 
-# Regex definitions for parsing
+# Initialize the pure Python OCR Engine globally (loads instant model into memory)
+engine = RapidOCR()
+
 ALLOWED_CARRIERS = {
     "Delhivery", "Ekart Logistics", "Blue Dart", "DTDC", "Xpressbees",
     "Ecom Express", "Shadowfax", "India Post", "DHL", "FedEx", "UPS",
@@ -79,7 +75,6 @@ def extract_with_regex(text: str, filename: str = "") -> dict:
                         break
                 if tracking_number: break
 
-    # Advanced fallback strings
     is_fallback_tracking = False
     if not tracking_number:
         candidates = [w for w in re.sub(r'[^A-Z0-9\s]', '', normalized).split() if 8 <= len(w) <= 22 and any(c.isdigit() for c in w)]
@@ -105,7 +100,6 @@ def extract_with_regex(text: str, filename: str = "") -> dict:
     if "V-GUARD" in normalized:
         sender, recipient = "V-GUARD INDUSTRIES", "BANGALORE DIST CENTER"
 
-    # Handle status assignments
     fn_lower = filename.lower() if filename else ""
     if "empty" in fn_lower or "conveyor" in fn_lower:
         status, confidence = "NO_PARCEL", 0.95
@@ -133,27 +127,43 @@ def extract_with_regex(text: str, filename: str = "") -> dict:
     }
 
 def process_image(image_path: str) -> dict:
-    """Uses ultra-lightweight Tesseract engine to extract text data."""
+    """Uses pure-Python RapidOCR runtime to process the matrix logs without C++ system dependencies."""
     filename = os.path.basename(image_path)
     try:
-        logger.info(f"Opening image file for Tesseract processing: {filename}")
-        img = Image.open(image_path)
+        logger.info(f"Opening image file for RapidOCR processing: {filename}")
         
-        # Primary OCR run
-        full_text = pytesseract.image_to_string(img)
+        # RapidOCR returns a list of items: [ [box_coordinates], text_string, confidence_score ]
+        result, _ = engine(image_path)
+        
+        full_text = ""
+        if result:
+            lines = [line[1] for line in result if len(line) > 1]
+            full_text = " \n ".join(lines)
+            
         parsed = extract_with_regex(full_text, filename=filename)
         
-        # Rotational fallback check if label comes back empty/unreadable
+        # Rotational fallback check if label text comes back blank
         if parsed["status"] in ["LABEL_UNREADABLE", "NO_LABEL"] or not parsed["tracking_number"]:
             logger.info("Attempting 180-degree rotational retry...")
-            rotated_text = pytesseract.image_to_string(img.rotate(180))
-            rotated_parsed = extract_with_regex(rotated_text, filename=filename)
-            if rotated_parsed["tracking_number"] and rotated_parsed["status"] == "OK":
-                return rotated_parsed
+            img = Image.open(image_path).rotate(180)
+            # Temporarily save rotated check matrix
+            rotated_path = f"rotated_{filename}"
+            img.save(rotated_path)
+            
+            rotated_result, _ = engine(rotated_path)
+            if os.path.exists(rotated_path):
+                os.remove(rotated_path)
                 
+            if rotated_result:
+                rotated_lines = [line[1] for line in rotated_result if len(line) > 1]
+                rotated_text = " \n ".join(rotated_lines)
+                rotated_parsed = extract_with_regex(rotated_text, filename=filename)
+                if rotated_parsed["tracking_number"] and rotated_parsed["status"] == "OK":
+                    return rotated_parsed
+                    
         return parsed
     except Exception as e:
-        logger.error(f"Tesseract backend failure: {e}")
+        logger.error(f"RapidOCR backend processing failure: {e}")
         return {
             "tracking_number": None, "weight": None, "dimensions": None, "carrier": "",
             "sender": "UNKNOWN SENDER", "recipient": "UNKNOWN RECIPIENT", "confidence": 0.10, "status": "LABEL_UNREADABLE"
