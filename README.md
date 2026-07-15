@@ -1,157 +1,108 @@
 # Parcel Label Extractor
 
-A robust, production-quality parcel label text extraction and scanner status classification system featuring a dual-stage processing pipeline: Multimodal AI (Ollama + LLaVA) with a fallback to Local OCR (EasyOCR + regex patterns).
+A lightweight local web app for uploading parcel images, extracting label details, and classifying the scanner situation into simple status categories such as OK, NO_PARCEL, LABEL_BLOCKED, or LABEL_UNREADABLE.
 
-## Features
-- **Dual-Stage Pipeline**: Uses LLaVA via Ollama for multi-modal extraction, falling back automatically to EasyOCR and regex-based layout parsing.
-- **Advanced OCR Parsing**: Includes tracking number validation (UPS, FedEx, USPS, DHL), weight/dimension detection, carrier categorization, and 180° rotation retry when labels are upside down.
-- **Production FastAPI Backend**: Async file handling, 20 MB size limit, threat-safe in-memory background worker, HTML sanitization, and UUID safety.
-- **Test Image Generator**: Generates 18 mock parcel scanner images for clean, blurred, blocked, empty, or multiple parcel scenarios.
+## What this project does
+- Lets a user upload a parcel image through a simple browser UI.
+- Runs OCR-based extraction on the backend to identify fields such as tracking number, carrier, weight, and dimensions.
+- Returns a structured result plus a status label for the image.
+- Supports downloading completed job results as a CSV file.
 
----
+## Why I built it
+I wanted to create a practical demo that combines a polished frontend, a Python backend, and local OCR processing without needing a heavy cloud setup. The priority was to make the project easy to run on a laptop and easy to understand, rather than to build the most advanced parcel-processing system possible.
 
-## Directory Structure
+## Approach and why
+- I chose a simple FastAPI backend so the app could be launched locally with minimal setup.
+- I used local OCR instead of depending on a remote AI service so it is easier to run without internet or extra infrastructure.
+- The extraction logic is rule-based and explainable, which makes it easier to debug than a black-box model.
+- This approach is strong for a prototype, demo, or learning project, but it is not yet a fully production-grade parcel vision pipeline.
+
+## Tech stack
+- Python 3.10+ — the main programming language for the backend and processing logic.
+- FastAPI — powers the API for uploading files, tracking jobs, and serving results.
+- Uvicorn — the ASGI server used to run the FastAPI app locally.
+- RapidOCR ONNX Runtime — the local OCR engine used to read text from parcel labels.
+- Pillow — used for basic image handling and a rotation-based retry when an image looks upside down.
+- HTML, CSS, and JavaScript — provide the simple browser-based UI.
+- Python Multipart — enables file uploads from the browser to the backend.
+
+## Run it locally in under 15 minutes
+
+### Option 1: Windows one-click startup (fastest)
+1. Install Python 3.10+ and make sure Python is available in your terminal.
+2. Open the project folder in PowerShell.
+3. Run one of these:
+   - start_app.bat
+   - .\start_app.ps1
+4. Wait for the setup to finish. The first run may take 5–10 minutes because dependencies are being installed.
+5. Open your browser at http://localhost:3000
+
+This launcher creates a local virtual environment, installs the required packages, and starts the app for you.
+
+### Option 2: Manual startup
+```powershell
+py -m venv .venv
+.\.venv\Scripts\Activate.ps1
+pip install -r requirements.txt
+uvicorn main:app --host 0.0.0.0 --port 3000
 ```
-parcel-tracker/
-├── main.py                    # FastAPI application server
-├── processor.py               # Dual-stage AI pipeline
-├── generate_test_data.py      # Pillow-based test JPEG generator
-├── requirements.txt           # Python dependencies
-├── README.md                  # System manual
-├── static/                    # Frontend assets (Single-Page App)
+
+Then open http://localhost:3000 in your browser.
+
+> If this is your first run, expect the OCR dependencies to install before the app becomes fully responsive.
+
+## Project structure
+```text
+Parcel/
+├── main.py                  # FastAPI backend and API routes
+├── processor.py             # OCR extraction and status classification logic
+├── generate_test_data.py    # Creates sample parcel images for testing
+├── requirements.txt         # Python dependencies
+├── start_app.bat            # One-click Windows launcher
+├── start_app.ps1            # One-click PowerShell launcher
+├── static/                  # Frontend files
 │   ├── index.html
 │   ├── style.css
 │   └── app.js
-└── uploads/                   # Temporary upload cache (auto-created)
+└── uploads/                 # Temporary upload folder created at runtime
 ```
 
----
-
-## Getting Started
-
-### 1. Installation
-Install the required packages from the requirements file:
-```bash
-pip install -r requirements.txt
-```
-
-### 2. Run Ollama (Primary Pipeline)
-To use the high-quality LLaVA extraction, make sure Ollama is installed locally and run:
-```bash
-# Start Ollama service on your local system
-ollama serve
-
-# Pull the required multimodal LLaVA model
-ollama pull llava
-```
-
-### 3. Run EasyOCR Fallback (Secondary Pipeline)
-If Ollama is not running, the pipeline gracefully falls back to EasyOCR. 
-*Note: EasyOCR requires `PyTorch`. If `pip install easyocr` doesn't automatically configure your CPU/GPU runtime, install torch first:*
-```bash
-pip install torch torchvision --extra-index-url https://download.pytorch.org/whl/cpu
-```
-
-### 4. Running the FastAPI Server
-To boot up the application backend and serve the static files:
-```bash
-uvicorn main:app --reload --host 0.0.0.0 --port 3000
-```
-Open your web browser and navigate to `http://localhost:3000` to interact with the GUI.
-
-### 5. One-Click Windows Setup
-Non-technical users on Windows can start everything with a single click:
-- Double-click `start_app.bat` for the simple launcher.
-- Or right-click `start_app.ps1` and choose "Run with PowerShell".
-
-These launchers will:
-- create a local virtual environment,
-- install the required Python packages,
-- start the app automatically in the browser.
-
----
-
-## Environment Variables
-The application reads these variables from your environment.
-- `OLLAMA_URL`: URL to your Ollama API instance (Defaults to `http://localhost:11434`).
-- `OLLAMA_MODEL`: Multimodal model to call (Defaults to `llava`).
-
-To run with custom values:
-```bash
-export OLLAMA_URL=http://localhost:11434
-export OLLAMA_MODEL=llava
-uvicorn main:app --reload
-```
-
----
-
-## API Reference
-
-### 1. Upload Parcel Image
-- **Endpoint**: `POST /api/upload`
-- **Payload**: Form-Data (`file` containing JPEG, JPG, or PNG image)
-- **Response**:
-  ```json
-  {
-    "job_id": "80fb8e49-0cf5-4e78-9ef4-d3ecbc87ec49",
-    "status": "pending",
-    "progress": 0
-  }
-  ```
-
-### 2. Poll Job Status
-- **Endpoint**: `GET /api/job/{job_id}`
-- **Response**:
-  ```json
-  {
-    "job_id": "80fb8e49-0cf5-4e78-9ef4-d3ecbc87ec49",
-    "status": "completed",
-    "progress": 100,
-    "filename": "package.jpg",
-    "result": {
-      "tracking_number": "1Z999AA10123456784",
-      "carrier": "UPS",
-      "weight": "12.5 LBS",
-      "dimensions": "12x8x6",
-      "sender": "AMAZON DISTRIB",
-      "recipient": "HELEN SMITH",
-      "confidence": 0.95,
-      "status": "OK"
-    }
-  }
-  ```
-
-### 3. Download Job CSV
-- **Endpoint**: `GET /api/job/{job_id}/download`
-- **Output**: File download (`parcel_job_{job_id}.csv`)
-
-### 4. Service Health Check
-- **Endpoint**: `GET /api/health`
-- **Response**:
-  ```json
-  {
-    "status": "healthy",
-    "service": "Parcel Label Extractor"
-  }
-  ```
-
----
-
-## Generating Test Data
-To generate the 18 synthetic images representing multiple parcel scanner states and view their manifest:
-```bash
+## Quick test data
+You can generate a small set of sample images to test the app:
+```powershell
 python generate_test_data.py
 ```
-This creates a folder named `test_images/` containing JPEGs representing clean, blurred, blocked, empty, or multiple parcel scenarios, along with a `manifest.json`.
 
----
+This creates a test_images folder with synthetic parcel scenarios that help validate the UI and OCR flow.
 
-## Scanner Status Definitions
-- `OK`: A parcel label was found and successfully read.
-- `NO_PARCEL`: The conveyor belt is empty or there are no packages visible.
-- `MULTIPLE_PARCELS`: More than one package is visible in the scanner viewport.
-- `PARTIAL_PARCEL`: The parcel is cropped, shifted, or cut off.
-- `LABEL_BLOCKED`: The parcel label is covered by straps, hands, marker marks, or tape.
-- `LABEL_UNREADABLE`: The label is low resolution, crumpled, torn, or highly out-of-focus.
-- `NO_LABEL`: The package is visible, but there is no label attached.
-- `LOW_CONFIDENCE`: A label was found, but the scanning confidence falls below acceptable levels.
+## UI images
+Space for screenshots that will be added later.
+
+### Screenshot 1
+- Add your first UI image here.
+
+### Screenshot 2
+- Add your second UI image here.
+
+### Screenshot 3
+- Add your third UI image here.
+
+## What I would improve with more time
+- Add a stronger OCR pipeline with better layout understanding and confidence scoring.
+- Improve handling for blurry, rotated, partially visible, or damaged labels.
+- Add automated tests and a small CI pipeline.
+- Add better job history, user feedback, and a more refined UI.
+- Containerize the app with Docker for easier deployment.
+
+## Known limitations
+- OCR accuracy depends heavily on image quality, lighting, label angle, and sharpness.
+- The current version is a strong prototype, but it is not yet a production-grade parcel scanning system.
+- Some labels may be misread or partially classified when the label is cropped, blocked, or heavily distorted.
+- The app currently runs locally and does not include advanced cloud-based inference or GPU acceleration.
+- The status logic is heuristic-based, so results should be treated as helpful suggestions rather than guaranteed correctness.
+
+## API overview
+- POST /api/upload — upload one or more parcel images.
+- GET /api/job/{job_id} — check job progress and results.
+- GET /api/job/{job_id}/download — download the completed result as CSV.
+- GET /api/health — simple health check endpoint.
