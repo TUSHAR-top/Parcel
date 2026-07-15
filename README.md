@@ -59,6 +59,16 @@ uvicorn main:app --reload --host 0.0.0.0 --port 3000
 ```
 Open your web browser and navigate to `http://localhost:3000` to interact with the GUI.
 
+### 5. One-Click Windows Setup
+Non-technical users on Windows can start everything with a single click:
+- Double-click `start_app.bat` for the simple launcher.
+- Or right-click `start_app.ps1` and choose "Run with PowerShell".
+
+These launchers will:
+- create a local virtual environment,
+- install the required Python packages,
+- start the app automatically in the browser.
+
 ---
 
 ## Environment Variables
