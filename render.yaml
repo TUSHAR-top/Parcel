@@ -1,0 +1,11 @@
+services:
+  - type: web
+    name: parcel-extractor-backend
+    runtime: python
+    plan: free
+    buildCommand: pip install -r requirements.txt
+    startCommand: uvicorn main:app --host 0.0.0.0 --port $PORT
+    envVars:
+      # Tell Render's package manager to install the Tesseract Linux packages
+      - key: UBUNTU_APT_PACKAGES
+        value: tesseract-ocr
