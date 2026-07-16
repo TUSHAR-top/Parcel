@@ -50,6 +50,9 @@ What this covers:
 - A small static UI is served from the `static/` folder for manual uploads and progress polling.
 
 ## Architecture (How)
+<img width="1024" height="559" alt="image" src="https://github.com/user-attachments/assets/f7b0c0c0-9706-4543-9546-75f10e508d74" />
+
+<img width="1024" height="559" alt="image" src="https://github.com/user-attachments/assets/ac07f71e-adbb-4788-84a8-51fa318ad6cc" />
 
 **Pipeline walkthrough:**
 
@@ -113,9 +116,15 @@ Then upload some of the images through the UI or call the `/api/upload` endpoint
 ## How to Use (for non-technical users)
 
 1. Open the application in a browser (http://127.0.0.1:8000).
+<img width="1516" height="837" alt="image" src="https://github.com/user-attachments/assets/0f95e020-d262-4fa6-a95e-ea67993f1e55" />
 2. Use the upload control to attach one or more `.jpg/.jpeg/.png` images and click **Upload**.
+<img width="1547" height="682" alt="image" src="https://github.com/user-attachments/assets/f1a99a84-ee4a-4a3b-b2bb-43c18849584a" />
 3. The UI polls `/api/job/{job_id}` for progress. When complete you'll see extracted fields and a one-click CSV download for that job.
+<img width="1291" height="921" alt="image" src="https://github.com/user-attachments/assets/9168f11a-cc9c-46a0-8663-18b5b1d62549" />
 4. For batch reports, use **Download All Completed** which calls `/api/batch/download`.
+<img width="1207" height="872" alt="image" src="https://github.com/user-attachments/assets/6cb981e2-73df-4bc5-961d-92c297643ae6" />
+
+<img width="1542" height="337" alt="image" src="https://github.com/user-attachments/assets/8e1e9921-e4a3-4091-889a-aef13f7d7e58" />
 
 ## Output Format
 
@@ -210,10 +219,3 @@ A manual smoke test sequence:
 No deployed demo is provided with this repository. Use `generate_test_data.py` and the local server to verify the pipeline quickly.
 
 ---
-
-If you'd like, I can also:
-
-- Add a short `curl` snippet for automated uploads.
-- Commit a tiny integration test that runs `generate_test_data.py` and exercises `/api/upload`.
-
-Would you like me to add either?
